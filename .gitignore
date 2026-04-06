@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.spec
+data/*.db
+installer-output/*
+release/
