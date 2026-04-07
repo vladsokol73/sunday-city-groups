@@ -88,6 +88,11 @@ def _configure_table(table: QTableWidget) -> None:
     table.verticalHeader().setDefaultSectionSize(34)
 
 
+def _center_item(item: QTableWidgetItem) -> QTableWidgetItem:
+    item.setTextAlignment(Qt.AlignCenter)
+    return item
+
+
 class StatCard(QFrame):
     def __init__(self, caption: str) -> None:
         super().__init__()
@@ -344,6 +349,7 @@ class SubgroupDialog(QDialog):
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                _center_item(item)
                 if column == 5 and participant.subgroup_name:
                     item.setToolTip(f"Участник уже состоит в подгруппе «{participant.subgroup_name}».")
                 self.table.setItem(row, column, item)
@@ -497,9 +503,8 @@ class ParticipantsTab(QWidget):
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if column in (6, 7, 8):
-                    item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, column, item)
+                _center_item(item)
 
     def _selected_participant_id(self) -> int | None:
         row = self.table.currentRow()
@@ -656,10 +661,7 @@ class SubgroupsTab(QWidget):
             member_names = ", ".join(member.nickname for member in subgroup.members)
             values = [str(subgroup.id), subgroup.name, member_names, str(len(subgroup.members))]
             for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if column == 3:
-                    item.setTextAlignment(Qt.AlignCenter)
-                self.subgroups_table.setItem(row, column, item)
+                self.subgroups_table.setItem(row, column, _center_item(QTableWidgetItem(value)))
 
     def _selected_subgroup(self) -> Subgroup | None:
         row = self.subgroups_table.currentRow()
