@@ -51,6 +51,8 @@ Each export supports custom intro text and automatically adds party summary befo
 
 ## Run Locally
 
+The project uses the standard `venv + pip` workflow. `uv` is not required.
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
