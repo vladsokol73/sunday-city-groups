@@ -120,7 +120,7 @@ class Database:
 
     def reset_all_party_counts_to_zero(self) -> None:
         with self._connect() as connection:
-            connection.execute("UPDATE participants SET party_count = 0")
+            connection.execute("UPDATE participants SET party_count = NULL")
 
     def list_subgroups(self) -> list[Subgroup]:
         with self._connect() as connection:

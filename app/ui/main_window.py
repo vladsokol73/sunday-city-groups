@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -277,10 +279,12 @@ class SubgroupDialog(QDialog):
         self.participants = participants
         self.subgroup = subgroup
         self.preselected_ids = set(preselected_ids or [])
+        self.participant_by_id: dict[int, Participant] = {
+            participant.id: participant for participant in participants if participant.id is not None
+        }
         self.selected_ids: set[int] = set(self.preselected_ids)
         self.all_participants = list(participants)
         self.filtered_participants = list(participants)
-        self._restoring_selection = False
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Поиск участников (ник, Telegram, VK, имя)")
@@ -294,24 +298,25 @@ class SubgroupDialog(QDialog):
         self.name_edit.setPlaceholderText("Например: Основа 1, Вечерняя пачка, Друзья")
 
         self.info_label = QLabel(
-            "Выберите участников кликом по строкам. Один участник может состоять только в одной подгруппе."
+            "Добавляйте участников в подгруппу справа. Один участник может состоять только в одной подгруппе."
         )
         self.info_label.setObjectName("sectionDescription")
         self.info_label.setWordWrap(True)
 
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(
-            ["ID", "Ник", "Telegram", "VK", "Имя", "Текущая подгруппа"]
-        )
-        _configure_table(self.table)
-        self.table.setSelectionMode(QAbstractItemView.MultiSelection)
-        self.table.setColumnHidden(0, True)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(4, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.available_list = QListWidget()
+        self.available_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.available_list.setObjectName("subgroupAvailableList")
+        self.available_list.itemDoubleClicked.connect(lambda item: self._add_from_available([item]))
+
+        self.selected_list = QListWidget()
+        self.selected_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.selected_list.setObjectName("subgroupSelectedList")
+        self.selected_list.itemDoubleClicked.connect(lambda item: self._remove_from_selected([item]))
+
+        self.add_button = _create_button("Добавить →", "primary")
+        self.remove_button = _create_button("← Убрать")
+        self.add_button.clicked.connect(lambda: self._add_from_available(self.available_list.selectedItems()))
+        self.remove_button.clicked.connect(lambda: self._remove_from_selected(self.selected_list.selectedItems()))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -337,13 +342,30 @@ class SubgroupDialog(QDialog):
         card_layout.addLayout(form_layout)
         card_layout.addWidget(self.info_label)
         card_layout.addWidget(self.search_edit)
-        card_layout.addWidget(self.table)
+
+        lists_grid = QGridLayout()
+        lists_grid.setHorizontalSpacing(12)
+        lists_grid.setVerticalSpacing(10)
+        lists_grid.addWidget(QLabel("Доступные"), 0, 0)
+        lists_grid.addWidget(QLabel("В подгруппе"), 0, 2)
+
+        lists_grid.addWidget(self.available_list, 1, 0)
+
+        buttons_col = QVBoxLayout()
+        buttons_col.setSpacing(10)
+        buttons_col.addStretch(1)
+        buttons_col.addWidget(self.add_button)
+        buttons_col.addWidget(self.remove_button)
+        buttons_col.addStretch(1)
+        lists_grid.addLayout(buttons_col, 1, 1)
+
+        lists_grid.addWidget(self.selected_list, 1, 2)
+
+        card_layout.addLayout(lists_grid)
         layout.addWidget(card)
         layout.addWidget(buttons)
 
         self._fill_data()
-
-        self.table.itemSelectionChanged.connect(self._sync_persistent_selection_from_visible)
 
     def _fill_data(self) -> None:
         if self.subgroup is not None:
@@ -371,66 +393,87 @@ class SubgroupDialog(QDialog):
                     ]
                 ).lower()
             ]
+        self._rebuild_lists()
 
-        self._restoring_selection = True
-        self.table.blockSignals(True)
-        self.table.setRowCount(len(self.filtered_participants))
+    def _rebuild_lists(self) -> None:
         editable_subgroup_id = self.subgroup.id if self.subgroup else None
 
-        for row, participant in enumerate(self.filtered_participants):
-            values = [
-                str(participant.id),
-                participant.nickname,
-                participant.telegram_nick,
-                participant.vk_nick,
-                participant.full_name,
-                participant.subgroup_name or "",
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                _center_item(item)
-                if column == 5 and participant.subgroup_name:
-                    item.setToolTip(f"Участник уже состоит в подгруппе «{participant.subgroup_name}».")
-                self.table.setItem(row, column, item)
+        self.available_list.blockSignals(True)
+        self.selected_list.blockSignals(True)
 
-            participant_id = participant.id or -1
-            in_other_subgroup = participant.subgroup_id is not None and participant.subgroup_id != editable_subgroup_id
-            if in_other_subgroup:
-                for column in range(self.table.columnCount()):
-                    cell = self.table.item(row, column)
-                    if cell is not None:
-                        cell.setFlags(cell.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsEnabled)
-            elif participant_id in self.selected_ids:
-                self.table.selectRow(row)
+        self.available_list.clear()
+        self.selected_list.clear()
 
-        self.table.resizeRowsToContents()
-        self.table.blockSignals(False)
-        self._restoring_selection = False
-        self._sync_persistent_selection_from_visible()
+        selected_participants = [
+            self.participant_by_id[participant_id]
+            for participant_id in sorted(self.selected_ids)
+            if participant_id in self.participant_by_id
+        ]
+        for participant in selected_participants:
+            self.selected_list.addItem(self._make_participant_item(participant, disabled=False, show_subgroup=False))
 
-    def _sync_persistent_selection_from_visible(self) -> None:
-        if self._restoring_selection:
-            return
-
-        visible_ids: set[int] = set()
-        visible_selected_ids: set[int] = set()
-
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
-            if item is None:
+        for participant in self.filtered_participants:
+            if participant.id is None:
                 continue
-            participant_id = int(item.text())
-            visible_ids.add(participant_id)
-            if self.table.selectionModel().isRowSelected(row, self.table.rootIndex()):
-                visible_selected_ids.add(participant_id)
+            if participant.id in self.selected_ids:
+                continue
 
-        # Remove items that are visible but not selected anymore.
-        self.selected_ids.difference_update(visible_ids - visible_selected_ids)
-        # Add currently selected visible items.
-        self.selected_ids.update(visible_selected_ids)
+            in_other_subgroup = participant.subgroup_id is not None and participant.subgroup_id != editable_subgroup_id
+            disabled = bool(in_other_subgroup)
+            self.available_list.addItem(self._make_participant_item(participant, disabled=disabled, show_subgroup=True))
+
+        self.available_list.blockSignals(False)
+        self.selected_list.blockSignals(False)
+
+    def _make_participant_item(self, participant: Participant, *, disabled: bool, show_subgroup: bool) -> QListWidgetItem:
+        tail = ""
+        if show_subgroup and participant.subgroup_name:
+            tail = f"  •  {participant.subgroup_name}"
+
+        text = " | ".join(
+            [
+                participant.nickname,
+                participant.telegram_nick or "-",
+                participant.vk_nick or "-",
+                participant.full_name or "-",
+            ]
+        ) + tail
+
+        item = QListWidgetItem(text)
+        if participant.id is not None:
+            item.setData(Qt.UserRole, int(participant.id))
+
+        if disabled:
+            item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+            if participant.subgroup_name:
+                item.setToolTip(f"Участник уже в подгруппе «{participant.subgroup_name}».")
+            else:
+                item.setToolTip("Участник уже состоит в другой подгруппе.")
+        return item
+
+    def _add_from_available(self, items: list[QListWidgetItem]) -> None:
+        if not items:
+            return
+        for item in items:
+            if not (item.flags() & Qt.ItemIsEnabled):
+                continue
+            participant_id = item.data(Qt.UserRole)
+            if participant_id is None:
+                continue
+            self.selected_ids.add(int(participant_id))
+        self._rebuild_lists()
+
+    def _remove_from_selected(self, items: list[QListWidgetItem]) -> None:
+        if not items:
+            return
+        for item in items:
+            participant_id = item.data(Qt.UserRole)
+            if participant_id is None:
+                continue
+            self.selected_ids.discard(int(participant_id))
+        self._rebuild_lists()
 
     def selected_participant_ids(self) -> list[int]:
-        self._sync_persistent_selection_from_visible()
         return sorted(self.selected_ids)
 
     def get_payload(self) -> tuple[str, list[int]]:
@@ -492,14 +535,12 @@ class ParticipantsTab(QWidget):
         self.add_button = _create_button("Добавить", "primary")
         self.edit_button = _create_button("Изменить")
         self.delete_button = _create_button("Удалить", "danger")
-        self.create_subgroup_button = _create_button("Создать подгруппу из выбранных")
-        self.reset_parties_button = _create_button("Сбросить всем пати в 0")
+        self.reset_parties_button = _create_button("Сбросить всем пати")
         self.refresh_button = _create_button("Обновить")
 
         self.add_button.clicked.connect(self.add_participant)
         self.edit_button.clicked.connect(self.edit_selected_participant)
         self.delete_button.clicked.connect(self.delete_selected_participant)
-        self.create_subgroup_button.clicked.connect(self.create_subgroup_from_selection)
         self.reset_parties_button.clicked.connect(self.reset_all_parties_to_zero)
         self.refresh_button.clicked.connect(self.main_window.refresh_all)
 
@@ -514,7 +555,6 @@ class ParticipantsTab(QWidget):
         toolbar_row.addWidget(self.add_button)
         toolbar_row.addWidget(self.edit_button)
         toolbar_row.addWidget(self.delete_button)
-        toolbar_row.addWidget(self.create_subgroup_button)
         toolbar_row.addWidget(self.reset_parties_button)
         toolbar_row.addWidget(self.refresh_button)
         toolbar_layout.addLayout(toolbar_row)
@@ -666,36 +706,11 @@ class ParticipantsTab(QWidget):
         self.database.delete_participant(participant_id)
         self.main_window.refresh_all()
 
-    def create_subgroup_from_selection(self) -> None:
-        selected_ids = self._selected_participant_ids()
-        if len(selected_ids) < 2:
-            QMessageBox.information(
-                self,
-                "Подсказка",
-                "Выделите минимум двух участников в таблице и затем создайте подгруппу.",
-            )
-            return
-
-        dialog = SubgroupDialog(
-            participants=self.database.list_participants(),
-            preselected_ids=selected_ids,
-            parent=self,
-        )
-        if dialog.exec() != QDialog.Accepted:
-            return
-        try:
-            name, participant_ids = dialog.get_payload()
-            self.database.create_subgroup(name, participant_ids)
-        except ValueError as error:
-            QMessageBox.warning(self, "Ошибка", str(error))
-            return
-        self.main_window.refresh_all()
-
     def reset_all_parties_to_zero(self) -> None:
         answer = QMessageBox.question(
             self,
             "Сбросить пати",
-            "Сбросить всем участникам значение пати до 0?\n\nЭто изменит и тех, у кого сейчас стоит null.",
+            "Сбросить всем участникам значение пати до null?\n\nЭто означает, что человек не идёт на пати.",
         )
         if answer != QMessageBox.Yes:
             return
