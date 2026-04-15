@@ -118,6 +118,10 @@ class Database:
             connection.execute("DELETE FROM participants WHERE id = ?", (participant_id,))
             self._delete_small_subgroups(connection)
 
+    def reset_all_party_counts_to_zero(self) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE participants SET party_count = 0")
+
     def list_subgroups(self) -> list[Subgroup]:
         with self._connect() as connection:
             rows = connection.execute(

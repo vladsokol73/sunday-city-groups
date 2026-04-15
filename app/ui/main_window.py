@@ -277,6 +277,18 @@ class SubgroupDialog(QDialog):
         self.participants = participants
         self.subgroup = subgroup
         self.preselected_ids = set(preselected_ids or [])
+        self.selected_ids: set[int] = set(self.preselected_ids)
+        self.all_participants = list(participants)
+        self.filtered_participants = list(participants)
+        self._restoring_selection = False
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Поиск участников (ник, Telegram, VK, имя)")
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(180)
+        self.search_timer.timeout.connect(self._apply_filter)
+        self.search_edit.textChanged.connect(lambda: self.search_timer.start())
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Например: Основа 1, Вечерняя пачка, Друзья")
@@ -324,21 +336,48 @@ class SubgroupDialog(QDialog):
         form_layout.addRow("Название", self.name_edit)
         card_layout.addLayout(form_layout)
         card_layout.addWidget(self.info_label)
+        card_layout.addWidget(self.search_edit)
         card_layout.addWidget(self.table)
         layout.addWidget(card)
         layout.addWidget(buttons)
 
         self._fill_data()
 
+        self.table.itemSelectionChanged.connect(self._sync_persistent_selection_from_visible)
+
     def _fill_data(self) -> None:
         if self.subgroup is not None:
             self.name_edit.setText(self.subgroup.name)
             self.preselected_ids.update(member.id for member in self.subgroup.members if member.id is not None)
+            self.selected_ids.update(self.preselected_ids)
 
-        self.table.setRowCount(len(self.participants))
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        search_value = self.search_edit.text().strip().lower()
+        if not search_value:
+            self.filtered_participants = list(self.all_participants)
+        else:
+            self.filtered_participants = [
+                participant
+                for participant in self.all_participants
+                if search_value
+                in " ".join(
+                    [
+                        participant.nickname,
+                        participant.telegram_nick,
+                        participant.vk_nick,
+                        participant.full_name,
+                    ]
+                ).lower()
+            ]
+
+        self._restoring_selection = True
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(self.filtered_participants))
         editable_subgroup_id = self.subgroup.id if self.subgroup else None
 
-        for row, participant in enumerate(self.participants):
+        for row, participant in enumerate(self.filtered_participants):
             values = [
                 str(participant.id),
                 participant.nickname,
@@ -361,17 +400,38 @@ class SubgroupDialog(QDialog):
                     cell = self.table.item(row, column)
                     if cell is not None:
                         cell.setFlags(cell.flags() & ~Qt.ItemIsSelectable & ~Qt.ItemIsEnabled)
-            elif participant_id in self.preselected_ids:
+            elif participant_id in self.selected_ids:
                 self.table.selectRow(row)
 
         self.table.resizeRowsToContents()
+        self.table.blockSignals(False)
+        self._restoring_selection = False
+        self._sync_persistent_selection_from_visible()
+
+    def _sync_persistent_selection_from_visible(self) -> None:
+        if self._restoring_selection:
+            return
+
+        visible_ids: set[int] = set()
+        visible_selected_ids: set[int] = set()
+
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is None:
+                continue
+            participant_id = int(item.text())
+            visible_ids.add(participant_id)
+            if self.table.selectionModel().isRowSelected(row, self.table.rootIndex()):
+                visible_selected_ids.add(participant_id)
+
+        # Remove items that are visible but not selected anymore.
+        self.selected_ids.difference_update(visible_ids - visible_selected_ids)
+        # Add currently selected visible items.
+        self.selected_ids.update(visible_selected_ids)
 
     def selected_participant_ids(self) -> list[int]:
-        rows = sorted({index.row() for index in self.table.selectionModel().selectedRows()})
-        participant_ids: list[int] = []
-        for row in rows:
-            participant_ids.append(int(self.table.item(row, 0).text()))
-        return participant_ids
+        self._sync_persistent_selection_from_visible()
+        return sorted(self.selected_ids)
 
     def get_payload(self) -> tuple[str, list[int]]:
         name = self.name_edit.text().strip()
@@ -402,6 +462,9 @@ class ParticipantsTab(QWidget):
         self.database = database
         self.main_window = main_window
         self.all_participants: list[Participant] = []
+        self.selected_ids: set[int] = set()
+        self._filtered_ids: set[int] = set()
+        self._restoring_selection = False
 
         self.total_label = QLabel("0 записей")
         self.total_label.setObjectName("sectionDescription")
@@ -424,17 +487,20 @@ class ParticipantsTab(QWidget):
         header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
         for column in (2, 3, 5, 6, 7, 8):
             header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self.table.itemSelectionChanged.connect(self._sync_persistent_selection_from_visible)
 
         self.add_button = _create_button("Добавить", "primary")
         self.edit_button = _create_button("Изменить")
         self.delete_button = _create_button("Удалить", "danger")
         self.create_subgroup_button = _create_button("Создать подгруппу из выбранных")
+        self.reset_parties_button = _create_button("Сбросить всем пати в 0")
         self.refresh_button = _create_button("Обновить")
 
         self.add_button.clicked.connect(self.add_participant)
         self.edit_button.clicked.connect(self.edit_selected_participant)
         self.delete_button.clicked.connect(self.delete_selected_participant)
         self.create_subgroup_button.clicked.connect(self.create_subgroup_from_selection)
+        self.reset_parties_button.clicked.connect(self.reset_all_parties_to_zero)
         self.refresh_button.clicked.connect(self.main_window.refresh_all)
 
         toolbar_card, toolbar_layout = _create_card(
@@ -449,6 +515,7 @@ class ParticipantsTab(QWidget):
         toolbar_row.addWidget(self.edit_button)
         toolbar_row.addWidget(self.delete_button)
         toolbar_row.addWidget(self.create_subgroup_button)
+        toolbar_row.addWidget(self.reset_parties_button)
         toolbar_row.addWidget(self.refresh_button)
         toolbar_layout.addLayout(toolbar_row)
 
@@ -469,6 +536,9 @@ class ParticipantsTab(QWidget):
         self._apply_filter()
 
     def _apply_filter(self) -> None:
+        # persist selection before rebuilding
+        self._sync_persistent_selection_from_visible()
+
         search_value = self.search_edit.text().strip().lower()
         filtered_participants = [
             participant
@@ -486,6 +556,9 @@ class ParticipantsTab(QWidget):
         ]
 
         self.total_label.setText(f"{len(filtered_participants)} из {len(self.all_participants)} записей")
+        self._filtered_ids = {p.id for p in filtered_participants if p.id is not None}
+        self._restoring_selection = True
+        self.table.blockSignals(True)
         self.table.setRowCount(len(filtered_participants))
 
         for row, participant in enumerate(filtered_participants):
@@ -506,6 +579,31 @@ class ParticipantsTab(QWidget):
                 self.table.setItem(row, column, item)
                 _center_item(item)
 
+            if participant.id is not None and participant.id in self.selected_ids:
+                self.table.selectRow(row)
+
+        self.table.blockSignals(False)
+        self._restoring_selection = False
+        self._sync_persistent_selection_from_visible()
+
+    def _sync_persistent_selection_from_visible(self) -> None:
+        if self._restoring_selection:
+            return
+        model = self.table.selectionModel()
+        if model is None:
+            return
+
+        visible_selected_ids = {
+            int(self.table.item(index.row(), 0).text())
+            for index in model.selectedRows()
+            if self.table.item(index.row(), 0) is not None
+        }
+
+        # Remove items that are currently visible but no longer selected.
+        self.selected_ids.difference_update(self._filtered_ids - visible_selected_ids)
+        # Add selected visible items.
+        self.selected_ids.update(visible_selected_ids)
+
     def _selected_participant_id(self) -> int | None:
         row = self.table.currentRow()
         if row < 0:
@@ -513,7 +611,9 @@ class ParticipantsTab(QWidget):
         return int(self.table.item(row, 0).text())
 
     def _selected_participant_ids(self) -> list[int]:
-        return sorted({int(self.table.item(index.row(), 0).text()) for index in self.table.selectionModel().selectedRows()})
+        # persistent selection across searches
+        self._sync_persistent_selection_from_visible()
+        return sorted(self.selected_ids)
 
     def add_participant(self) -> None:
         dialog = ParticipantDialog(parent=self)
@@ -589,6 +689,17 @@ class ParticipantsTab(QWidget):
         except ValueError as error:
             QMessageBox.warning(self, "Ошибка", str(error))
             return
+        self.main_window.refresh_all()
+
+    def reset_all_parties_to_zero(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Сбросить пати",
+            "Сбросить всем участникам значение пати до 0?\n\nЭто изменит и тех, у кого сейчас стоит null.",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.database.reset_all_party_counts_to_zero()
         self.main_window.refresh_all()
 
 

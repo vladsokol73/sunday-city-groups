@@ -11,3 +11,5 @@ dist/
 data/*.db
 installer-output/*
 release/
+.idea/
+opengl-lab1/
