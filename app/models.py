@@ -14,6 +14,7 @@ class Participant:
     role: str
     party_count: int | None
     preferred_group: int | None
+    secondary_preferred_group: int | None = None
     subgroup_id: int | None = None
     subgroup_name: str | None = None
 

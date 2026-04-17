@@ -167,7 +167,10 @@ def _component_from_members(members: list[Participant], label: str) -> _Componen
     preference_counts: dict[int, int] = defaultdict(int)
     for member in members:
         if member.preferred_group is not None:
-            preference_counts[member.preferred_group] += 1
+            # Primary preference has higher weight than fallback.
+            preference_counts[member.preferred_group] += 2
+        if member.secondary_preferred_group is not None:
+            preference_counts[member.secondary_preferred_group] += 1
     members = sorted(members, key=lambda item: item.nickname.lower())
     return _Component(
         label=label,

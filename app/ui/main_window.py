@@ -161,6 +161,14 @@ class ParticipantDialog(QDialog):
         self.preferred_group_null.toggled.connect(self.preferred_group_edit.setDisabled)
         self.preferred_group_edit.setDisabled(True)
 
+        self.secondary_group_edit = QSpinBox()
+        self.secondary_group_edit.setMinimum(1)
+        self.secondary_group_edit.setMaximum(999)
+        self.secondary_group_null = QCheckBox("Доп. группа не указана")
+        self.secondary_group_null.setChecked(True)
+        self.secondary_group_null.toggled.connect(self.secondary_group_edit.setDisabled)
+        self.secondary_group_edit.setDisabled(True)
+
         form_box = QGroupBox("Основные данные")
         form_layout = QFormLayout(form_box)
         form_layout.setLabelAlignment(Qt.AlignLeft)
@@ -181,8 +189,10 @@ class ParticipantDialog(QDialog):
         party_layout.addRow("Роль", self.role_box)
         party_layout.addRow("Количество пати", self.party_count_edit)
         party_layout.addRow("", self.party_count_null)
-        party_layout.addRow("Удобная группа", self.preferred_group_edit)
+        party_layout.addRow("Основная группа", self.preferred_group_edit)
         party_layout.addRow("", self.preferred_group_null)
+        party_layout.addRow("Доп. группа", self.secondary_group_edit)
+        party_layout.addRow("", self.secondary_group_null)
 
         helper_label = QLabel(
             "Обязательное поле только одно: игровой ник. Если пати = null, участник не идет в распределение."
@@ -235,6 +245,11 @@ class ParticipantDialog(QDialog):
         if has_preferred_group:
             self.preferred_group_edit.setValue(participant.preferred_group or 1)
 
+        has_secondary_group = participant.secondary_preferred_group is not None
+        self.secondary_group_null.setChecked(not has_secondary_group)
+        if has_secondary_group:
+            self.secondary_group_edit.setValue(participant.secondary_preferred_group or 1)
+
     def get_participant(self) -> Participant:
         nickname = self.nickname_edit.text().strip()
         if not nickname:
@@ -248,9 +263,16 @@ class ParticipantDialog(QDialog):
         preferred_group = (
             None if self.preferred_group_null.isChecked() else self.preferred_group_edit.value()
         )
+        secondary_group = (
+            None if self.secondary_group_null.isChecked() else self.secondary_group_edit.value()
+        )
 
         if preferred_group is not None and party_count is None:
             raise ValueError("Нельзя указать удобную группу, если человек не идет на пати.")
+        if secondary_group is not None and party_count is None:
+            raise ValueError("Нельзя указать доп. группу, если человек не идет на пати.")
+        if preferred_group is not None and secondary_group == preferred_group:
+            secondary_group = None
 
         return Participant(
             id=self.participant.id if self.participant else None,
@@ -262,6 +284,7 @@ class ParticipantDialog(QDialog):
             role=self.role_box.currentData(),
             party_count=party_count,
             preferred_group=preferred_group,
+            secondary_preferred_group=secondary_group,
         )
 
 
@@ -496,7 +519,8 @@ class ParticipantsTab(QWidget):
         "Дата рождения",
         "Роль",
         "Пати",
-        "Удобная группа",
+        "Осн. группа",
+        "Доп. группа",
         "Подгруппа",
     ]
 
@@ -527,8 +551,8 @@ class ParticipantsTab(QWidget):
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
-        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)
-        for column in (2, 3, 5, 6, 7, 8):
+        header.setSectionResizeMode(10, QHeaderView.ResizeToContents)
+        for column in (2, 3, 5, 6, 7, 8, 9):
             header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
         self.table.itemSelectionChanged.connect(self._sync_persistent_selection_from_visible)
 
@@ -612,6 +636,7 @@ class ParticipantsTab(QWidget):
                 "Админ" if participant.role == "admin" else "Участник",
                 "null" if participant.party_count is None else str(participant.party_count),
                 "" if participant.preferred_group is None else str(participant.preferred_group),
+                "" if participant.secondary_preferred_group is None else str(participant.secondary_preferred_group),
                 participant.subgroup_name or "",
             ]
             for column, value in enumerate(values):

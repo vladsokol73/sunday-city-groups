@@ -34,9 +34,11 @@ class Database:
                     role TEXT NOT NULL DEFAULT 'participant',
                     party_count INTEGER,
                     preferred_group INTEGER,
+                    secondary_preferred_group INTEGER,
                     CHECK (role IN ('participant', 'admin')),
                     CHECK (party_count IS NULL OR party_count >= 0),
-                    CHECK (preferred_group IS NULL OR preferred_group >= 1)
+                    CHECK (preferred_group IS NULL OR preferred_group >= 1),
+                    CHECK (secondary_preferred_group IS NULL OR secondary_preferred_group >= 1)
                 );
 
                 CREATE TABLE IF NOT EXISTS participant_links (
@@ -62,7 +64,18 @@ class Database:
                 );
                 """
             )
+            self._migrate_add_secondary_preference(connection)
             self._migrate_legacy_links(connection)
+
+    @staticmethod
+    def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
+        rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(row[1] == column for row in rows)
+
+    def _migrate_add_secondary_preference(self, connection: sqlite3.Connection) -> None:
+        if self._column_exists(connection, "participants", "secondary_preferred_group"):
+            return
+        connection.execute("ALTER TABLE participants ADD COLUMN secondary_preferred_group INTEGER")
 
     def list_participants(self) -> list[Participant]:
         with self._connect() as connection:
@@ -89,6 +102,7 @@ class Database:
             participant.role,
             participant.party_count,
             participant.preferred_group,
+            participant.secondary_preferred_group,
         )
         with self._connect() as connection:
             if participant.id is None:
@@ -96,9 +110,9 @@ class Database:
                     """
                     INSERT INTO participants (
                         nickname, telegram_nick, vk_nick, full_name,
-                        birth_date, role, party_count, preferred_group
+                        birth_date, role, party_count, preferred_group, secondary_preferred_group
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     values,
                 )
@@ -107,7 +121,7 @@ class Database:
                     """
                     UPDATE participants
                     SET nickname = ?, telegram_nick = ?, vk_nick = ?, full_name = ?,
-                        birth_date = ?, role = ?, party_count = ?, preferred_group = ?
+                        birth_date = ?, role = ?, party_count = ?, preferred_group = ?, secondary_preferred_group = ?
                     WHERE id = ?
                     """,
                     (*values, participant.id),
@@ -136,7 +150,8 @@ class Database:
                        p.birth_date,
                        p.role,
                        p.party_count,
-                       p.preferred_group
+                       p.preferred_group,
+                       p.secondary_preferred_group
                 FROM subgroups AS s
                 JOIN subgroup_members AS sm ON sm.subgroup_id = s.id
                 JOIN participants AS p ON p.id = sm.participant_id
@@ -162,6 +177,7 @@ class Database:
                     role=row["role"],
                     party_count=row["party_count"],
                     preferred_group=row["preferred_group"],
+                    secondary_preferred_group=row["secondary_preferred_group"],
                     subgroup_id=subgroup_id,
                     subgroup_name=row["subgroup_name"],
                 )
@@ -301,6 +317,7 @@ class Database:
                    p.role,
                    p.party_count,
                    p.preferred_group,
+                   p.secondary_preferred_group,
                    s.id AS subgroup_id,
                    s.name AS subgroup_name
             FROM participants AS p
@@ -320,6 +337,9 @@ class Database:
             role=row["role"],
             party_count=row["party_count"],
             preferred_group=row["preferred_group"],
+            secondary_preferred_group=row["secondary_preferred_group"]
+            if "secondary_preferred_group" in row.keys()
+            else None,
             subgroup_id=row["subgroup_id"] if "subgroup_id" in row.keys() else None,
             subgroup_name=row["subgroup_name"] if "subgroup_name" in row.keys() else None,
         )
