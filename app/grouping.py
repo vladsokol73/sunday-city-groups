@@ -14,6 +14,12 @@ from app.models import (
 
 MAX_GROUP_SIZE = 25
 
+# Placement costs: strongly prefer satisfying primary, then secondary, then balance loads.
+_PRIMARY_MATCH = 0
+_SECONDARY_MATCH = 50
+_NO_PREFERENCE = 0
+_MISMATCH_PENALTY = 1_000_000
+
 
 @dataclass(slots=True)
 class _Component:
@@ -244,16 +250,15 @@ def _assign_all_components_to_groups(
             over_target = max(0, future_member_parties - target)
             distance_to_target = abs(target - future_member_parties)
             size_distance = abs(ideal_group_size - future_member_count)
-            preference_hits = component.preference_counts.get(group.number, 0)
-            preference_total = sum(component.preference_counts.values())
-            preference_misses = preference_total - preference_hits
+            preference_cost = _component_preference_cost(component, group.number)
 
+            # preference_cost must dominate load-balancing so we only sacrifice preferences
+            # when capacity forces it or when no preference was set.
             score = (
+                preference_cost,
                 max_load_after,
                 load_spread_after,
                 over_target,
-                preference_misses,
-                -preference_hits,
                 distance_to_target,
                 size_distance,
                 group.member_count,
@@ -271,6 +276,30 @@ def _assign_all_components_to_groups(
         _place_component_in_group(component, best_group)
 
     return skipped_components
+
+
+def _member_preference_cost(member: Participant, group_number: int) -> int:
+    primary = member.preferred_group
+    secondary = member.secondary_preferred_group
+
+    if primary is None and secondary is None:
+        return _NO_PREFERENCE
+
+    # Only fallback specified: treat it like the main wish.
+    if primary is None and secondary is not None:
+        return _PRIMARY_MATCH if group_number == secondary else _MISMATCH_PENALTY
+
+    if group_number == primary:
+        return _PRIMARY_MATCH
+
+    if secondary is not None and group_number == secondary:
+        return _SECONDARY_MATCH
+
+    return _MISMATCH_PENALTY
+
+
+def _component_preference_cost(component: _Component, group_number: int) -> int:
+    return sum(_member_preference_cost(member, group_number) for member in component.members)
 
 
 def _place_component_in_group(component: _Component, group: _WorkingGroup) -> None:

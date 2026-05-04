@@ -10,6 +10,7 @@ def make_participant(
     party_count: int | None,
     role: str = "participant",
     preferred_group: int | None = None,
+    secondary_preferred_group: int | None = None,
 ) -> Participant:
     return Participant(
         id=participant_id,
@@ -21,6 +22,7 @@ def make_participant(
         role=role,
         party_count=party_count,
         preferred_group=preferred_group,
+        secondary_preferred_group=secondary_preferred_group,
     )
 
 
@@ -124,6 +126,26 @@ class GroupingTests(unittest.TestCase):
 
         self.assertEqual(placement["Alpha"], 1)
         self.assertEqual(placement["Beta"], 2)
+
+    def test_primary_preference_wins_over_load_balancing_when_feasible(self) -> None:
+        """Regression: preferences must not be sacrificed just to spread member parties."""
+        participants = [
+            make_participant(1, "Want1", 5, preferred_group=1),
+            make_participant(2, "X_n", 5),
+            make_participant(3, "Y_n", 5),
+            make_participant(4, "Z_n", 5),
+        ]
+
+        result = generate_groups(participants, [], group_count=4)
+
+        placement: dict[int, int] = {}
+        for group in result.groups:
+            for member in group.members:
+                pid = member.participant.id
+                if pid is not None:
+                    placement[pid] = group.group_number
+
+        self.assertEqual(placement[1], 1)
 
     def test_admin_parties_are_spread_when_possible(self) -> None:
         participants = [
